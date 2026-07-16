@@ -1,0 +1,10 @@
+# Built binaries
+/relay
+/ech0-relay
+/ech0-relay-*
+
+# Atomic-write temp files
+state/.state-*.tmp
+
+# Local editor / OS noise
+.DS_Store

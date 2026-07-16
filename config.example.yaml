@@ -1,0 +1,32 @@
+# Ech0-Relay 配置示例
+# 复制成 config.yaml 后按需修改。此文件不含任何密钥，可安全提交进仓库。
+# 访问令牌通过环境变量注入（见 token_env），在 GitHub Actions 里由 secret 映射。
+
+# 目标 Ech0 实例。可配置多个。
+instances:
+  myblog:
+    # 实例根地址（不含 /api 后缀）
+    base_url: https://echo.example.com
+    # 持有 access token 的环境变量名。令牌本身绝不写进本文件。
+    # token 需具备作用域 echo:read + echo:write、audience integration，且归属 admin 用户。
+    # 注意：.github/workflows/sync.yml 需把对应 secret 显式映射进 env（GH 无法动态索引 secret）。
+    token_env: ECH0_MYBLOG_TOKEN
+
+# 同步任务：每条把一个公开 Telegram 频道镜像进一个实例。
+syncs:
+  - name: myblog/TestFlightCN     # state key，稳定唯一；留空则默认 "<instance>/<channel>"
+    channel: TestFlightCN         # 公开频道 slug，抓取 https://t.me/s/TestFlightCN
+    instance: myblog              # 指向上面 instances 里的键
+    tag: TestFlightCN             # 来源标签；keep>0 时必填，且同实例内各 retention 任务的 tag 必须唯一
+    max_per_run: 10               # 每次运行最多发布几条（按最旧优先，积压跨轮排空）
+    with_source_link: true        # 正文尾部追加 “🔗 https://t.me/<channel>/<id>”
+    private: false                # 是否发为私密
+
+    # 保留清理（可选）。keep > 0 时启用：只保留该标签下最新 keep 条，删除更旧的。
+    # 只会删除带上面 tag 的帖子，绝不触碰你手写的内容。
+    keep: 0                       # 0/缺省 = 不清理
+    max_delete_per_run: 50        # 每轮删除数量上限（安全护栏）
+
+    # 首次运行（无 state 游标）行为：
+    backfill_on_first_run: false  # false（默认）= 只记录当前最新 id、不补历史，避免首刷屏
+    backfill_limit: 20            # 仅当 backfill_on_first_run=true 时生效，补最近这么多条
