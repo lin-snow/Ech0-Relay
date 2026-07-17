@@ -14,7 +14,7 @@ instances:
 
 # 同步任务：每条把一个公开 Telegram 频道镜像进一个实例。
 syncs:
-  - name: myblog/TestFlightCN     # state key，稳定唯一；留空则默认 "<instance>/<channel>"
+  - name: ech0-relay/TestFlightCN     # state key，稳定唯一；留空则默认 "<instance>/<channel>"
     channel: TestFlightCN         # 公开频道 slug，抓取 https://t.me/s/TestFlightCN
     instance: myblog              # 指向上面 instances 里的键
     tag: TestFlightCN             # 来源标签；keep>0 时必填，且同实例内各 retention 任务的 tag 必须唯一
