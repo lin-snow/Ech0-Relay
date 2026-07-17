@@ -28,5 +28,5 @@ syncs:
     max_delete_per_run: 50        # 每轮删除数量上限（安全护栏）
 
     # 首次运行（无 state 游标）行为：
-    backfill_on_first_run: false  # false（默认）= 只记录当前最新 id、不补历史，避免首刷屏
+    backfill_on_first_run: true  # false（默认）= 只记录当前最新 id、不补历史，避免首刷屏
     backfill_limit: 20            # 仅当 backfill_on_first_run=true 时生效，补最近这么多条
