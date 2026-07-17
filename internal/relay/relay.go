@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
 	"strconv"
 	"strings"
 
@@ -23,12 +24,15 @@ import (
 type Scraper interface {
 	FetchLatest(ctx context.Context, channel string) ([]telegram.Post, error)
 	FetchSince(ctx context.Context, channel string, sinceID int64) ([]telegram.Post, error)
+	DownloadImage(ctx context.Context, url string) ([]byte, error)
 }
 
-// EchoClient is everything the relay needs from an Ech0 instance: posting plus
-// the retention read/delete surface.
+// EchoClient is everything the relay needs from an Ech0 instance: posting,
+// image re-hosting, plus the retention read/delete surface.
 type EchoClient interface {
 	PostEcho(ctx context.Context, req ech0.EchoRequest) error
+	UploadImage(ctx context.Context, filename string, data []byte) (ech0.FileDto, error)
+	DeleteFile(ctx context.Context, id string) error
 	retention.EchoAPI
 }
 
@@ -125,16 +129,40 @@ func runSync(ctx context.Context, s config.Sync, cfg *config.Config, st *state.S
 	}
 
 	for _, p := range toPublish {
-		content := buildContent(s, p)
 		if opts.DryRun {
+			content := buildContent(s, p, p.ImageURLs)
+			if s.UploadImages && len(p.ImageURLs) > 0 {
+				log.Info("dry-run: would re-host images", "id", p.ID, "count", len(p.ImageURLs))
+			}
 			log.Info("dry-run: would post", "id", p.ID, "chars", len(content))
 			res.Posted++
 			finalCursor = p.ID
 			continue
 		}
-		if err := client.PostEcho(ctx, buildRequest(s, p, content)); err != nil {
+
+		// With upload_images on, images that re-host successfully attach as echo
+		// files; the rest stay as CDN links in the content so no image is lost.
+		linkImages := p.ImageURLs
+		var files []ech0.EchoFileRef
+		if s.UploadImages && len(p.ImageURLs) > 0 {
+			files, linkImages = uploadImages(ctx, s, p, deps.Scraper, client, log)
+		}
+		req := buildRequest(s, p, buildContent(s, p, linkImages))
+		if len(files) > 0 {
+			req.EchoFiles = files
+			req.Layout = "waterfall"
+		}
+
+		if err := client.PostEcho(ctx, req); err != nil {
 			// Stop at the first failure to preserve order and avoid gaps; the
-			// failed post and everything after it retry next run.
+			// failed post and everything after it retry next run. Uploads whose
+			// echo never landed are deleted best-effort (Ech0 would GC them
+			// after 24h anyway).
+			for _, f := range files {
+				if derr := client.DeleteFile(ctx, f.FileID); derr != nil {
+					log.Warn("cleanup of uploaded file failed", "file_id", f.FileID, "err", derr)
+				}
+			}
 			res.Failed++
 			res.Err = err
 			log.Error("post failed", "id", p.ID, "err", err)
@@ -143,7 +171,7 @@ func runSync(ctx context.Context, s config.Sync, cfg *config.Config, st *state.S
 		res.Posted++
 		finalCursor = p.ID
 		st.Set(s.Name, p.ID)
-		log.Info("posted", "id", p.ID)
+		log.Info("posted", "id", p.ID, "images_rehosted", len(files))
 	}
 	res.NewCursor = finalCursor
 
@@ -200,14 +228,58 @@ func (deps Deps) gatherPosts(ctx context.Context, s config.Sync, oldCursor int64
 	return nil, maxID, nil
 }
 
-func buildContent(s config.Sync, p telegram.Post) string {
+// uploadImages re-hosts a post's images on the instance: download from the
+// Telegram CDN, upload via the file API. Failed images are returned as
+// fallback URLs so the caller can keep them as CDN links in the content —
+// a degraded post beats a wedged sync.
+func uploadImages(ctx context.Context, s config.Sync, p telegram.Post, scr Scraper, client EchoClient, log *slog.Logger) (files []ech0.EchoFileRef, fallback []string) {
+	for i, u := range p.ImageURLs {
+		data, err := scr.DownloadImage(ctx, u)
+		if err != nil {
+			log.Warn("image download failed; falling back to CDN link", "id", p.ID, "url", u, "err", err)
+			fallback = append(fallback, u)
+			continue
+		}
+		dto, err := client.UploadImage(ctx, imageFilename(s.Channel, p.ID, i, u), data)
+		if err != nil {
+			log.Warn("image upload failed; falling back to CDN link", "id", p.ID, "url", u, "err", err)
+			fallback = append(fallback, u)
+			continue
+		}
+		files = append(files, ech0.EchoFileRef{FileID: dto.ID, SortOrder: i})
+	}
+	return files, fallback
+}
+
+// imageExts is Ech0's upload whitelist for images.
+var imageExts = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true, ".avif": true,
+}
+
+// imageFilename derives an upload filename whose extension passes Ech0's
+// validation, defaulting to .jpg (Telegram photo CDN serves JPEG).
+func imageFilename(channel string, postID int64, idx int, url string) string {
+	if q := strings.IndexByte(url, '?'); q >= 0 {
+		url = url[:q]
+	}
+	ext := strings.ToLower(path.Ext(url))
+	if !imageExts[ext] {
+		ext = ".jpg"
+	}
+	return fmt.Sprintf("%s-%d-%d%s", channel, postID, idx, ext)
+}
+
+// buildContent renders the echo text. imageURLs are the images to embed as
+// markdown links: all post images in link mode, only re-host failures in
+// upload mode (successfully uploaded images attach as echo files instead).
+func buildContent(s config.Sync, p telegram.Post, imageURLs []string) string {
 	var parts []string
 	if p.TextMD != "" {
 		parts = append(parts, p.TextMD)
 	}
-	if len(p.ImageURLs) > 0 {
+	if len(imageURLs) > 0 {
 		var imgs strings.Builder
-		for i, u := range p.ImageURLs {
+		for i, u := range imageURLs {
 			if i > 0 {
 				imgs.WriteByte('\n')
 			}

@@ -51,6 +51,11 @@ type Sync struct {
 	MaxPerRun int `yaml:"max_per_run"`
 	// WithSourceLink appends a "via t.me/<channel>/<id>" footer to each echo.
 	WithSourceLink bool `yaml:"with_source_link"`
+	// UploadImages re-hosts post images on the instance: download from the
+	// Telegram CDN, upload via the file API (requires the file:write scope) and
+	// attach them as echo files (waterfall layout) instead of embedding CDN
+	// links in the content. Images that fail to re-host fall back to CDN links.
+	UploadImages bool `yaml:"upload_images"`
 	// Private posts the echo as private when true.
 	Private bool `yaml:"private"`
 	// Keep is the retention cap: keep at most Keep tagged echoes on the instance,

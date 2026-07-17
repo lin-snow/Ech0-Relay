@@ -146,6 +146,75 @@ func TestQueryEchos(t *testing.T) {
 	}
 }
 
+func TestUploadImage_MultipartFieldsAndResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/files/upload" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("not multipart: %v", err)
+		}
+		if got := r.FormValue("category"); got != "image" {
+			t.Errorf("category = %q", got)
+		}
+		if got := r.FormValue("storage_type"); got != "local" {
+			t.Errorf("storage_type = %q", got)
+		}
+		f, hdr, err := r.FormFile("file")
+		if err != nil {
+			t.Fatalf("file part: %v", err)
+		}
+		defer f.Close()
+		if hdr.Filename != "42.jpg" {
+			t.Errorf("filename = %q", hdr.Filename)
+		}
+		b, _ := io.ReadAll(f)
+		if string(b) != "jpegbytes" {
+			t.Errorf("file bytes = %q", b)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":1,"msg":"上传成功","data":{"id":"f-1","key":"k.jpg","url":"/api/files/images/k.jpg"}}`))
+	}))
+	defer srv.Close()
+
+	dto, err := testClient(srv.URL).UploadImage(context.Background(), "42.jpg", []byte("jpegbytes"))
+	if err != nil {
+		t.Fatalf("UploadImage: %v", err)
+	}
+	if dto.ID != "f-1" || dto.URL != "/api/files/images/k.jpg" {
+		t.Errorf("dto = %+v", dto)
+	}
+}
+
+func TestUploadImage_MissingIDIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":1,"msg":"ok","data":{}}`))
+	}))
+	defer srv.Close()
+
+	if _, err := testClient(srv.URL).UploadImage(context.Background(), "a.jpg", []byte("x")); err == nil {
+		t.Fatal("expected error for missing file id")
+	}
+}
+
+func TestDeleteFile_PathAndSuccess(t *testing.T) {
+	var gotPath, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":1,"msg":"ok","data":null}`))
+	}))
+	defer srv.Close()
+
+	if err := testClient(srv.URL).DeleteFile(context.Background(), "f-9"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/file/f-9" {
+		t.Errorf("got %s %s", gotMethod, gotPath)
+	}
+}
+
 func TestDeleteEcho_PathAndSuccess(t *testing.T) {
 	var gotPath, gotMethod string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

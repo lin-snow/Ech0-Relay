@@ -122,6 +122,31 @@ func (s *Scraper) FetchSince(ctx context.Context, channel string, sinceID int64)
 	return collected, nil
 }
 
+// maxImageBytes caps a single image download. Matches Ech0's default image
+// upload limit (20 MiB); Telegram photo previews are far smaller in practice.
+const maxImageBytes = 20 << 20
+
+// DownloadImage fetches one image (typically a Telegram CDN photo URL) with
+// the same retry policy as page fetches. Fails on images over maxImageBytes.
+func (s *Scraper) DownloadImage(ctx context.Context, url string) ([]byte, error) {
+	body, err := s.get(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	defer body.Close()
+	data, err := io.ReadAll(io.LimitReader(body, maxImageBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("telegram: read image %s: %w", url, err)
+	}
+	if len(data) > maxImageBytes {
+		return nil, fmt.Errorf("telegram: image %s exceeds %d bytes", url, maxImageBytes)
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("telegram: image %s is empty", url)
+	}
+	return data, nil
+}
+
 // fetchPage GETs one page and parses it.
 func (s *Scraper) fetchPage(ctx context.Context, channel string, before int64) ([]Post, int64, int, error) {
 	url := s.BaseURL + "/" + channel

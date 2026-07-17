@@ -9,6 +9,7 @@ instances:
     base_url: https://echo.example.com
     # 持有 access token 的环境变量名。令牌本身绝不写进本文件。
     # token 需具备作用域 echo:read + echo:write、audience integration，且归属 admin 用户。
+    # 若任一同步任务开启 upload_images，还需 file:write 作用域。
     # 注意：.github/workflows/sync.yml 需把对应 secret 显式映射进 env（GH 无法动态索引 secret）。
     token_env: ECH0_RELAY_TOKEN
 
@@ -21,6 +22,12 @@ syncs:
     max_per_run: 10               # 每次运行最多发布几条（按最旧优先，积压跨轮排空）
     with_source_link: true        # 正文尾部追加 “🔗 https://t.me/<channel>/<id>”
     private: false                # 是否发为私密
+
+    # 图片托管方式。false(默认)= 正文嵌入 Telegram CDN 图片直链(链接可能失效);
+    # true = 下载图片并上传到 Ech0 实例本地存储(localfs),以 waterfall 布局挂载到帖子,
+    # 永久留存、删帖时级联清理。开启需 token 额外具备 file:write 作用域。
+    # 单张图片上传/下载失败时自动降级为该图的 CDN 直链,不阻塞同步。
+    upload_images: false
 
     # 保留清理（可选）。keep > 0 时启用：只保留该标签下最新 keep 条，删除更旧的。
     # 只会删除带上面 tag 的帖子，绝不触碰你手写的内容。

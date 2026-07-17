@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"time"
 )
@@ -47,12 +48,26 @@ type TagRef struct {
 	Name string `json:"name"`
 }
 
+// EchoFileRef attaches a previously uploaded file to an echo by id.
+type EchoFileRef struct {
+	FileID    string `json:"file_id"`
+	SortOrder int    `json:"sort_order"`
+}
+
 // EchoRequest is the body for POST /api/echo.
 type EchoRequest struct {
-	Content   string   `json:"content"`
-	Private   bool     `json:"private"`
-	CreatedAt *int64   `json:"created_at,omitempty"` // Unix seconds; backfills the TG post time
-	Tags      []TagRef `json:"tags,omitempty"`
+	Content   string        `json:"content"`
+	Private   bool          `json:"private"`
+	CreatedAt *int64        `json:"created_at,omitempty"` // Unix seconds; backfills the TG post time
+	Tags      []TagRef      `json:"tags,omitempty"`
+	Layout    string        `json:"layout,omitempty"` // media layout, e.g. "waterfall"
+	EchoFiles []EchoFileRef `json:"echo_files,omitempty"`
+}
+
+// FileDto is the subset of the upload response the relay needs.
+type FileDto struct {
+	ID  string `json:"id"`
+	URL string `json:"url"`
 }
 
 // EchoItem is the subset of an echo the relay reads back from a query.
@@ -134,17 +149,65 @@ func (c *Client) DeleteEcho(ctx context.Context, id string) error {
 	return err
 }
 
+// UploadImage uploads image bytes to the instance's local storage
+// (POST /api/files/upload, multipart). Requires the file:write scope. The
+// returned FileDto.ID is referenced from an echo via EchoFiles; Ech0
+// garbage-collects uploads that stay unreferenced for 24h.
+func (c *Client) UploadImage(ctx context.Context, filename string, data []byte) (FileDto, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	part, err := mw.CreateFormFile("file", filename)
+	if err != nil {
+		return FileDto{}, fmt.Errorf("ech0: build multipart: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return FileDto{}, fmt.Errorf("ech0: build multipart: %w", err)
+	}
+	_ = mw.WriteField("category", "image")
+	_ = mw.WriteField("storage_type", "local")
+	if err := mw.Close(); err != nil {
+		return FileDto{}, fmt.Errorf("ech0: build multipart: %w", err)
+	}
+
+	raw, err := c.doRaw(ctx, http.MethodPost, "/api/files/upload", buf.Bytes(), mw.FormDataContentType())
+	if err != nil {
+		return FileDto{}, err
+	}
+	var dto FileDto
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return FileDto{}, fmt.Errorf("ech0: decode upload result: %w", err)
+	}
+	if dto.ID == "" {
+		return FileDto{}, fmt.Errorf("ech0: upload result missing file id")
+	}
+	return dto, nil
+}
+
+// DeleteFile removes an uploaded file by id (DELETE /api/file/{id}). Used to
+// tidy up uploads whose echo failed to post; only safe for unreferenced files.
+func (c *Client) DeleteFile(ctx context.Context, id string) error {
+	_, err := c.do(ctx, http.MethodDelete, "/api/file/"+id, nil)
+	return err
+}
+
 // do performs a request with retry/backoff and decodes the envelope. Success is
 // HTTP 2xx AND code == 1; anything else is an *APIError. Only network errors,
 // 429 and 5xx are retried — other 4xx (bad token/scope/body) fail immediately.
 func (c *Client) do(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
 	var payload []byte
+	var contentType string
 	if body != nil {
 		var err error
 		if payload, err = json.Marshal(body); err != nil {
 			return nil, fmt.Errorf("ech0: marshal request: %w", err)
 		}
+		contentType = "application/json"
 	}
+	return c.doRaw(ctx, method, path, payload, contentType)
+}
+
+// doRaw is do for a pre-encoded payload (JSON or multipart).
+func (c *Client) doRaw(ctx context.Context, method, path string, payload []byte, contentType string) (json.RawMessage, error) {
 	url := c.BaseURL + path
 
 	attempts := c.Retries
@@ -168,8 +231,8 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (json.Ra
 		}
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 		req.Header.Set("Accept", "application/json")
-		if payload != nil {
-			req.Header.Set("Content-Type", "application/json")
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
 		}
 
 		resp, err := c.HTTP.Do(req)
