@@ -39,7 +39,7 @@ jobs:
         # cannot index secrets by a dynamic name, so add one line here for every
         # instance you configure (matching its `token_env` in config.yaml).
         env:
-          ECH0_MYBLOG_TOKEN: ${{ secrets.ECH0_RELAY_TOKEN }}
+          ECH0_RELAY_TOKEN: ${{ secrets.ECH0_RELAY_TOKEN }}
         run: ./relay -config config.yaml -state state/state.json
 
       - name: Commit cursor state
