@@ -22,6 +22,8 @@ syncs:
     with_source_link: true        # 正文尾部追加 “🔗 https://t.me/<channel>/<id>”
     private: false                # 是否发为私密
 
+    upload_images: true
+
     # 保留清理（可选）。keep > 0 时启用：只保留该标签下最新 keep 条，删除更旧的。
     # 只会删除带上面 tag 的帖子，绝不触碰你手写的内容。
     keep: 0                       # 0/缺省 = 不清理
