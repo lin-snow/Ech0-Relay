@@ -6,7 +6,7 @@
 instances:
   myblog:
     # 实例根地址（不含 /api 后缀）
-    base_url: https://echo.example.com
+    base_url: https://news.vaaat.com
     # 持有 access token 的环境变量名。令牌本身绝不写进本文件。
     # token 需具备作用域 echo:read + echo:write、audience integration，且归属 admin 用户。
     # 注意：.github/workflows/sync.yml 需把对应 secret 显式映射进 env（GH 无法动态索引 secret）。
